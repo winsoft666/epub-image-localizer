@@ -24,28 +24,30 @@ class ProcessThread(QThread):
     progress_signal = pyqtSignal(int)
     finished_signal = pyqtSignal(bool, str)
     
-    def __init__(self, epub_path, output_dir, temp_dir_base):
+    def __init__(self, epub_paths, output_dir, temp_dir_base):
         super().__init__()
-        self.epub_path = epub_path
+        self.epub_paths = epub_paths
         self.output_dir = output_dir
         self.temp_dir_base = temp_dir_base
         
     def run(self):
         try:
-            self.log_signal.emit(f"开始处理EPUB文件: {os.path.normpath(self.epub_path)}")
-            success = self.process_epub()
-            if success:
-                self.finished_signal.emit(True, "处理完成")
-            else:
-                self.finished_signal.emit(False, "处理过程中出现错误，请查看日志")
+            total_files = len(self.epub_paths)
+            for i, epub_path in enumerate(self.epub_paths):
+                self.log_signal.emit(f"开始处理EPUB文件 ({i+1}/{total_files}): {os.path.normpath(epub_path)}")
+                success = self.process_epub(epub_path)
+                if not success:
+                    self.log_signal.emit(f"    处理文件 {os.path.normpath(epub_path)} 时出现错误")
+            
+            self.finished_signal.emit(True, "所有文件处理完成")
         except Exception as e:
-            self.log_signal.emit(f"处理出错: {str(e)}")
+            self.log_signal.emit(f"    处理出错: {str(e)}")
             self.finished_signal.emit(False, str(e))
     
-    def process_epub(self):
+    def process_epub(self, epub_path):
         # 创建临时目录，位于指定的临时目录基础路径下，按照指定格式命名
-        epub_dir = os.path.dirname(self.epub_path)
-        epub_name = os.path.splitext(os.path.basename(self.epub_path))[0]
+        epub_dir = os.path.dirname(epub_path)
+        epub_name = os.path.splitext(os.path.basename(epub_path))[0]
         temp_dir = os.path.join(self.temp_dir_base, f"{epub_name}_image_localizer_temp")
         output_epub_dir = os.path.join(self.output_dir, "output")
         
@@ -54,19 +56,19 @@ class ProcessThread(QThread):
         if not os.path.exists(output_epub_dir):
             os.makedirs(output_epub_dir)
             
-        self.log_signal.emit("解压EPUB文件...")
+        self.log_signal.emit("    解压EPUB文件...")
         self.progress_signal.emit(10)
         
         # 解压EPUB文件
-        with zipfile.ZipFile(self.epub_path, 'r') as zip_ref:
+        with zipfile.ZipFile(epub_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
             
-        self.log_signal.emit("EPUB文件解压完成")
+        self.log_signal.emit("    EPUB文件解压完成")
         self.progress_signal.emit(30)
         
         # 查找并下载图片
             
-        self.log_signal.emit("查找并下载图片...")
+        self.log_signal.emit("    查找并下载图片...")
         
         # 遍历解压后的文件，查找HTML文件
         html_files = []
@@ -82,7 +84,7 @@ class ProcessThread(QThread):
         total_handle_image_count = 0
         
         for i, file_path in enumerate(html_files):
-            self.log_signal.emit(f"处理文件: {os.path.normpath(file_path)}")
+            # self.log_signal.emit(f"处理文件: {os.path.normpath(file_path)}")
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
@@ -111,33 +113,33 @@ class ProcessThread(QThread):
                 error_messages.append(error_msg)
                 error_count += 1
         
-        self.log_signal.emit(f"处理了 {total_files} 个HTML文件，共 {total_handle_image_count} 个图片")
+        self.log_signal.emit(f"    处理了 {total_files} 个HTML文件，共 {total_handle_image_count} 个图片")
         self.progress_signal.emit(70)
         
         # 输出错误汇总
         if error_messages:
-            self.log_signal.emit(f"\n处理过程中出现 {error_count} 个错误:")
+            self.log_signal.emit(f"\n    处理过程中出现 {error_count} 个错误:")
             for i, error in enumerate(error_messages, 1):
                 self.log_signal.emit(f"{i}. {error}")
         
         # 如果有错误，不打包EPUB文件
         if error_count > 0:
             self.progress_signal.emit(100)
-            self.log_signal.emit("由于处理过程中出现错误，跳过EPUB打包步骤")
-            self.log_signal.emit(f"临时文件保留在目录: {os.path.normpath(temp_dir)}")
+            self.log_signal.emit("    由于处理过程中出现错误，跳过EPUB打包步骤")
+            self.log_signal.emit(f"    临时文件保留在目录: {os.path.normpath(temp_dir)}")
             return False
 
         if total_handle_image_count == 0:
             self.progress_signal.emit(100)
-            self.log_signal.emit("没有处理图片，跳过EPUB打包步骤")
-            self.log_signal.emit(f"临时文件保留在目录: {os.path.normpath(temp_dir)}")
+            self.log_signal.emit("    没有处理图片，跳过EPUB打包步骤")
+            self.log_signal.emit(f"    临时文件保留在目录: {os.path.normpath(temp_dir)}")
             return True
 
         # 重新打包EPUB
-        epub_name = os.path.splitext(os.path.basename(self.epub_path))[0]
-        output_epub_path = os.path.join(output_epub_dir, f"{epub_name}_localized.epub")
+        epub_name = os.path.splitext(os.path.basename(epub_path))[0]
+        output_epub_path = os.path.join(output_epub_dir, f"{epub_name}.epub")
         
-        self.log_signal.emit("重新打包EPUB文件...")
+        self.log_signal.emit("    重新打包EPUB文件...")
         with zipfile.ZipFile(output_epub_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for root, dirs, files in os.walk(temp_dir):
                 for file in files:
@@ -148,8 +150,8 @@ class ProcessThread(QThread):
         self.progress_signal.emit(90)
         
         # 不删除临时文件
-        self.log_signal.emit(f"EPUB文件已保存到: {os.path.normpath(output_epub_path)}")
-        self.log_signal.emit(f"临时文件保留在目录: {os.path.normpath(temp_dir)}")
+        self.log_signal.emit(f"    EPUB文件已保存到: {os.path.normpath(output_epub_path)}")
+        self.log_signal.emit(f"    临时文件保留在目录: {os.path.normpath(temp_dir)}")
         self.progress_signal.emit(100)
         return True
 
@@ -200,9 +202,7 @@ class ProcessThread(QThread):
                     image_path = os.path.normpath(os.path.join(html_dir, filename))
                     
                     # 如果图片已存在则跳过下载
-                    if os.path.exists(image_path):
-                        self.log_signal.emit(f"图片已存在，跳过下载: {src}")
-                    else:
+                    if not os.path.exists(image_path):
                         response = requests.get(src, timeout=30)
                         response.raise_for_status()
                         
@@ -210,7 +210,7 @@ class ProcessThread(QThread):
                         with open(image_path, 'wb') as f:
                             f.write(response.content)
                         
-                        self.log_signal.emit(f"下载图片: {src} -> {filename}")
+                        # self.log_signal.emit(f"下载图片: {src} -> {filename}")
                     
                     # 更新HTML中的图片链接为相对路径
                     img_tag['src'] = filename
@@ -226,7 +226,7 @@ class ProcessThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.epub_path = ""
+        self.epub_paths = []
         self.output_dir = ""
         self.temp_dir = ""
         self.init_ui()
@@ -252,7 +252,7 @@ class MainWindow(QMainWindow):
         self.epub_line = QLineEdit()
         self.epub_line.setReadOnly(True)
         epub_button = QPushButton("浏览...")
-        epub_button.clicked.connect(self.select_epub_file)
+        epub_button.clicked.connect(self.select_epub_files)
         
         epub_layout.addWidget(epub_label)
         epub_layout.addWidget(self.epub_line)
@@ -316,14 +316,16 @@ class MainWindow(QMainWindow):
         self.log_text.setReadOnly(True)
         main_layout.addWidget(self.log_text)
         
-    def select_epub_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
+    # 修改为支持选择多个EPUB文件
+    def select_epub_files(self):
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self, "选择EPUB文件", "", "EPUB Files (*.epub)")
         
-        if file_path:
-            self.epub_path = file_path
-            # 使用系统本地格式的路径
-            self.epub_line.setText(os.path.normpath(file_path))
+        if file_paths:
+            self.epub_paths = file_paths
+            # 显示所有选择的文件名，以逗号分隔
+            file_names = [os.path.basename(path) for path in file_paths]
+            self.epub_line.setText(", ".join(file_names))
             self.check_start_enabled()
             
     def select_output_dir(self):
@@ -347,12 +349,13 @@ class MainWindow(QMainWindow):
             
     def check_start_enabled(self):
         self.process_button.setEnabled(
-            bool(self.epub_path) and bool(self.output_dir))
+            bool(self.epub_paths) and bool(self.output_dir))
             
     def start_process(self):
-        if not os.path.exists(self.epub_path):
-            QMessageBox.warning(self, "错误", "EPUB文件不存在")
-            return
+        for epub_path in self.epub_paths:
+            if not os.path.exists(epub_path):
+                QMessageBox.warning(self, "错误", f"EPUB文件不存在: {epub_path}")
+                return
             
         if not os.path.exists(self.output_dir):
             QMessageBox.warning(self, "错误", "输出目录不存在")
@@ -369,7 +372,7 @@ class MainWindow(QMainWindow):
         self.log_text.clear()
         
         # 启动处理线程，传递临时目录参数
-        self.thread = ProcessThread(self.epub_path, self.output_dir, self.temp_dir)
+        self.thread = ProcessThread(self.epub_paths, self.output_dir, self.temp_dir)
         self.thread.log_signal.connect(self.update_log)
         self.thread.progress_signal.connect(self.update_progress)
         self.thread.finished_signal.connect(self.process_finished)
