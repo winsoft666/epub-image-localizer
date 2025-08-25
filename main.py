@@ -79,6 +79,7 @@ class ProcessThread(QThread):
         downloaded_count = 0
         error_count = 0
         error_messages = []
+        total_handle_image_count = 0
         
         for i, file_path in enumerate(html_files):
             self.log_signal.emit(f"处理文件: {os.path.normpath(file_path)}")
@@ -87,11 +88,13 @@ class ProcessThread(QThread):
                     content = f.read()
                 
                 # 解析HTML并下载图片
-                modified_content, file_errors = self.download_images(content, file_path, temp_dir)
-                
-                # 保存修改后的HTML
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(modified_content)
+                modified_content, handle_image_url_count, file_errors = self.download_images(content, file_path, temp_dir)
+                total_handle_image_count += handle_image_url_count
+
+                if handle_image_url_count > 0:
+                    # 保存修改后的HTML
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(modified_content)
                 
                 # 统计错误
                 if file_errors:
@@ -108,7 +111,7 @@ class ProcessThread(QThread):
                 error_messages.append(error_msg)
                 error_count += 1
         
-        self.log_signal.emit(f"处理了 {total_files} 个HTML文件")
+        self.log_signal.emit(f"处理了 {total_files} 个HTML文件，共 {total_handle_image_count} 个图片")
         self.progress_signal.emit(70)
         
         # 输出错误汇总
@@ -119,10 +122,17 @@ class ProcessThread(QThread):
         
         # 如果有错误，不打包EPUB文件
         if error_count > 0:
+            self.progress_signal.emit(100)
             self.log_signal.emit("由于处理过程中出现错误，跳过EPUB打包步骤")
             self.log_signal.emit(f"临时文件保留在目录: {os.path.normpath(temp_dir)}")
             return False
-            
+
+        if total_handle_image_count == 0:
+            self.progress_signal.emit(100)
+            self.log_signal.emit("没有处理图片，跳过EPUB打包步骤")
+            self.log_signal.emit(f"临时文件保留在目录: {os.path.normpath(temp_dir)}")
+            return True
+
         # 重新打包EPUB
         epub_name = os.path.splitext(os.path.basename(self.epub_path))[0]
         output_epub_path = os.path.join(output_epub_dir, f"{epub_name}_localized.epub")
@@ -152,7 +162,8 @@ class ProcessThread(QThread):
         
         html_dir = os.path.dirname(html_path)
         errors = []
-        
+        handle_image_url_count = 0
+
         for img_tag in img_tags:
             src = img_tag.get('src')
             if not src:
@@ -203,13 +214,14 @@ class ProcessThread(QThread):
                     
                     # 更新HTML中的图片链接为相对路径
                     img_tag['src'] = filename
-                    
+                    handle_image_url_count += 1
+
                 except Exception as e:
                     error_msg = f"下载图片 {src} 失败: {str(e)}"
                     self.log_signal.emit(error_msg)
                     errors.append(error_msg)
         
-        return str(soup), errors
+        return str(soup), handle_image_url_count, errors
 
 class MainWindow(QMainWindow):
     def __init__(self):
